@@ -1,0 +1,10 @@
+# Install CPU-only torch first (smaller, no CUDA):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+ultralytics>=8.3
+opencv-python>=4.8
+numpy>=1.24
+psutil>=5.9
+pytest>=7
+lap>=0.5
+openvino>=2024.0
+imageio-ffmpeg>=0.5

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Model weights (Ultralytics downloads them automatically on first run)
+*.pt
+*_openvino_model/
+# The person-attributes model in models/ must be downloaded separately (see README)
+models/*.bin
+models/*.xml
+
+# Input videos and generated results (large; regenerate with `predict full`)
+data/
+outputs/
+*.mp4
+.vpipe.lock
+
+# Claude Code (local assistant notes and settings)
+CLAUDE.md
+.claude/
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.DS_Store
+Thumbs.db
+
+# Assignment brief
+Real_Time_Video_Inference_Pipeline_Assignment.pdf

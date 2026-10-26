@@ -1,0 +1,39 @@
+{
+    // Terminal > Run Task... (or Ctrl+Shift+P > "Tasks: Run Task"). Ctrl+Shift+B runs the default build task.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "People analytics: full video",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "vpipe", "run", "--preset", "people", "--video", "data/people_walking.mp4",
+                     "--a-workers", "1", "--b-workers", "3", "--output-dir", "outputs/people"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "People analytics: quick test (first 10 s)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "vpipe", "run", "--preset", "people", "--video", "data/people_walking.mp4",
+                     "--a-workers", "1", "--b-workers", "3", "--max-frames", "300",
+                     "--output-dir", "outputs/test/people"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run tests",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "pytest", "-o", "addopts=", "-q"],
+            "group": { "kind": "test", "isDefault": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "Open output video",
+            "type": "shell",
+            "command": "Start-Process",
+            "args": ["outputs\\people\\output_annotated.mp4"],
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,60 @@
+{
+    // Run/debug from the "Run and Debug" panel (Ctrl+Shift+D), or press F5 for the selected entry.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "People analytics: full video",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "vpipe",
+            "args": ["run", "--preset", "people", "--video", "data/people_walking.mp4",
+                     "--a-workers", "1", "--b-workers", "3", "--output-dir", "outputs/people"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "People analytics: quick test (first 10 s)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "vpipe",
+            "args": ["run", "--preset", "people", "--video", "data/people_walking.mp4",
+                     "--a-workers", "1", "--b-workers", "3", "--max-frames", "300",
+                     "--output-dir", "outputs/test/people"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Assignment mode (classify -> detect)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "vpipe",
+            "args": ["run", "--video", "data/people_walking.mp4", "--a-workers", "2", "--b-workers", "2",
+                     "--max-frames", "300", "--output-dir", "outputs/test/assignment"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Tests: all",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["tests"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Tests: current file",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}

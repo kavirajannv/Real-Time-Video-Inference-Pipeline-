@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vpipe"
+version = "1.0.0"
+description = "Real-time CPU video inference pipeline: YOLO11 classification -> conditional YOLO11 detection"
+requires-python = ">=3.10"
+dependencies = [
+    "ultralytics>=8.3",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "psutil>=5.9",
+    "lap>=0.5",
+    "matplotlib>=3.7",
+    "openvino>=2024.0",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+vpipe = "vpipe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["real_model: needs downloaded YOLO weights and the input video (slow)"]
