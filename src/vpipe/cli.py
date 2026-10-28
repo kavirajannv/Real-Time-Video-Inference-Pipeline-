@@ -37,7 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vpipe", description="Real-time video inference pipeline (CPU)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("download", help="download the input video and YOLO11 weights")
+    d = sub.add_parser("download", help="download the YOLO11 weights (and, on request, the brief's sample clip)")
+    d.add_argument("--sample-video", action="store_true",
+                   help="also fetch the brief's solutions_ci_demo.mp4 (not used by default: input is people_walking.mp4)")
     d.add_argument("--video-dest", default="data/solutions_ci_demo.mp4")
 
     lb = sub.add_parser("labels", help="print Model A's real class labels (verify routing targets)")
@@ -45,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("--grep", default="", help="substring filter")
 
     r = sub.add_parser("run", help="run the pipeline")
-    r.add_argument("--video", default="data/solutions_ci_demo.mp4")
+    r.add_argument("--video", default="data/people_walking.mp4")
     r.add_argument("--output-dir", default="outputs")
     r.add_argument("--output-name", default="output_annotated.mp4")
     r.add_argument("--a-workers", type=int, default=2)
@@ -79,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--stop-after", type=float, default=0.0, help="simulate an operator stop after SEC seconds")
     r.add_argument("--inject-invalid-every", type=int, default=0, metavar="N", help="corrupt every Nth frame")
     r.add_argument("--no-video", action="store_true", help="skip writing the mp4 (benchmark inference only)")
+    r.add_argument("--min-conf-shown", type=float, default=0.0, metavar="P",
+                   help="draw only boxes with detector confidence >= P (people preset default 0.80; "
+                        "0 = all). Tracking and counts still use every detection")
+    r.add_argument("--preview", action="store_true",
+                   help="show a live window while running: input on the left, annotated output on the right")
     r.add_argument("--seed", type=int, default=0)
     g = r.add_argument_group("people / object analytics")
     g.add_argument("--preset", choices=("assignment", "people"), default="assignment",
@@ -140,7 +147,7 @@ def config_from_args(a: argparse.Namespace) -> PipelineConfig:
         detect_every=a.detect_every, infer_every=a.infer_every, gate=not a.no_gate, output_height=a.output_height,
         video_preset=a.video_preset,
         max_frames=a.max_frames, max_seconds=a.max_seconds, repeat=a.repeat, stop_after_s=a.stop_after, invalid_every=a.inject_invalid_every,
-        fault_a=_fault_from_args(a, "A"), fault_b=_fault_from_args(a, "B"), write_video=not a.no_video,
+        fault_a=_fault_from_args(a, "A"), fault_b=_fault_from_args(a, "B"), write_video=not a.no_video, preview=a.preview, min_conf_shown=a.min_conf_shown,
     )
 
 
@@ -182,6 +189,8 @@ def _people_preset(a: argparse.Namespace) -> PipelineConfig:
         _fast_mode(cfg, pick)
     if a.show_classes == "":
         cfg.show_classes = PEOPLE_SHOW_CLASSES
+    # boxes drawn only when the detector is 80-100 % sure; weaker ones still feed the tracker and counts
+    cfg.min_conf_shown = pick("min_conf_shown", 0.80)
     if a.attributes_model == "":
         from pathlib import Path
 
@@ -195,12 +204,13 @@ def _people_preset(a: argparse.Namespace) -> PipelineConfig:
 def fast_settings(physical_cores: int) -> tuple[int, int]:
     """(infer_every, detector workers) for --fast from the CPU size.
 
-    Measured on a 4-core i5-8265U held at 1.6 GHz, 40 s of 1080p: every 8th frame with 2 detector workers
-    = 28.3 fps (gate off, 720p, superfast). Bigger CPUs can afford to look at more frames. Explicit
-    --infer-every / --b-workers override these.
+    Measured on a 4-core i5-8265U held at 1.6 GHz, 40 s of 1080p (gate off, 720p, superfast, live
+    preview on): every 8th frame with 2 detector workers ingested 27.4 fps (Model B was the bottleneck:
+    150 x ~550 ms / 2 workers = 41 s of work for 40 s of video); every 10th keeps up at 30.0 fps.
+    Bigger CPUs can afford to look at more frames. Explicit --infer-every / --b-workers override these.
     """
     if physical_cores <= 4:
-        infer_every = 8
+        infer_every = 10
     elif physical_cores <= 6:
         infer_every = 6
     else:
@@ -208,25 +218,42 @@ def fast_settings(physical_cores: int) -> tuple[int, int]:
     return infer_every, max(1, physical_cores // 2)
 
 
-def _fast_mode(cfg: PipelineConfig, pick) -> None:
-    """--fast: aim for real time (the source fps, ~30) on a laptop CPU, never faster.
+# OpenVINO export of the people detector (`yolo export model=yolo11s.pt format=openvino`). Measured on the
+# 4-core test laptop: identical detections to yolo11s.pt (128/128 boxes, IoU > 0.9, conf diff 0.000) and
+# ~4x faster per frame as ONE worker (OpenVINO already uses every core; two workers fought: p95 1.9 s).
+# Costs ~25 s more startup (model compile).
+OPENVINO_DETECTOR = "yolo11s_openvino_model"
 
-    Only every Nth frame is analysed (others HELD: the tracker repeats the boxes), analysed frames skip
-    the gate (on street video it says "person" on every frame, so it only cost time: +18% measured),
-    the video is written at 720p with x264 superfast, and ingest is paced to the source fps.
+
+def _fast_mode(cfg: PipelineConfig, pick) -> None:
+    """--fast: aim for real time (the source fps, ~30) on a laptop CPU, never faster, never dropping a frame.
+
+    Only every Nth frame is analysed (others HELD: the tracker moves the boxes along each track), analysed
+    frames skip the gate (on street video it says "person" on every frame, so it only cost time: +18%
+    measured), the video is written at the source size with x264 superfast, and ingest is paced to the
+    source fps. With the OpenVINO detector present, Model B is one OpenVINO worker on every 5th frame.
     """
     import psutil
 
+    from dataclasses import replace
+    from pathlib import Path
+
     cores = psutil.cpu_count(logical=False) or 4
     infer_every, b_workers = fast_settings(cores)
+    if Path(OPENVINO_DETECTOR).is_dir() and pick("weights_b", None) is None:
+        # same detector, ~4x faster: detect twice as often and still keep up
+        cfg.model_b = replace(cfg.model_b, weights=OPENVINO_DETECTOR)
+        infer_every, b_workers = max(1, infer_every // 2), 1
     cfg.infer_every = pick("infer_every", infer_every)
     cfg.detect_every = pick("detect_every", 1)
     cfg.gate = False  # --fast implies --no-gate
     cfg.a_workers = pick("a_workers", 1)        # idle with the gate off, but the pool needs one
     cfg.b_workers = pick("b_workers", b_workers)
-    cfg.output_height = pick("output_height", 720)
+    cfg.output_height = pick("output_height", 0)  # full source size: no quality lost (1080p ~ -3 fps)
     cfg.video_preset = pick("video_preset", "superfast")
     cfg.pace = True
+    # live stream: keep the delay at ~one inference instead of letting Model B's queue grow
+    cfg.b_latest_only = cfg.mode == "live"
 
 
 def _ensure_weights(cfg: PipelineConfig) -> None:
@@ -248,9 +275,9 @@ def print_summary(s: dict) -> None:
           f"with detections: {s['frames_with_detections']}  no detections: {s['frames_no_detections']}")
     print(f"dropped: {s['frames_dropped']} ({s['drop_rate']:.1%})  invalid: {s['frames_invalid']}  "
           f"A err/timeout: {s['a_errors']}/{s['a_timeouts']}  B err/timeout: {s['b_errors']}/{s['b_timeouts']}  "
-          f"incomplete: {s['frames_incomplete']}")
-    print(f"source fps: {s['source_fps']}  input fps: {s['input_fps']}  output fps: {s['output_fps']}  "
-          f"wall: {s['wall_time_s']}s  (startup {s['startup_s']}s)")
+          f"incomplete: {s['frames_incomplete']}  stale A/B: {s.get('a_stale', 0)}/{s.get('b_stale', 0)}")
+    print(f"source fps: {s['source_fps']}  input fps: {s['input_fps']}  output fps: {s['output_fps']} "
+          f"(steady {s.get('output_fps_steady')})  wall: {s['wall_time_s']}s  (startup {s['startup_s']}s)")
     for k in ("a_infer", "b_infer", "a_queue_wait", "b_queue_wait", "end_to_end"):
         d = lat[k]
         print(f"  {k:<13} n={d.get('n', 0):<5} p50={f(d, 'p50')}  p95={f(d, 'p95')}  p99={f(d, 'p99')}  ms")
@@ -288,7 +315,8 @@ def main(argv=None) -> int:
     if a.cmd == "download":
         from .download import download_video, download_weights
 
-        download_video(a.video_dest)
+        if a.sample_video:
+            download_video(a.video_dest)
         download_weights()
         return 0
     if a.cmd == "labels":

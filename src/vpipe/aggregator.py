@@ -43,6 +43,7 @@ class Aggregator:
 
         self.late_results = 0
         self.unexpected_results = 0
+        self.b_superseded = 0  # live latest-only: routed frames skipped because a newer one was waiting
         self.released = 0
 
     # ------------------------------------------------------------------ ingest
@@ -134,7 +135,7 @@ class Aggregator:
             return
         rec.b_worker, rec.t_start_b, rec.t_end_b, rec.t_result_b = res.worker_id, res.t_start, res.t_end, now
         if res.stale:
-            rec.b_status, rec.b_error = BStatus.ERROR, res.error
+            rec.b_status, rec.b_error = BStatus.STALE, res.error
         elif not res.ok:
             rec.b_status, rec.b_error = BStatus.ERROR, res.error
         else:
@@ -147,6 +148,26 @@ class Aggregator:
             rec.detections = dets
             rec.b_status = BStatus.DETECTIONS if dets else BStatus.NO_DETECTIONS
         self._finalize(rec)
+
+    def skip_superseded_b(self, keep: int = 1) -> int:
+        """Live latest-only: skip all but the newest `keep` frames waiting for Model B.
+
+        A frame waiting behind a busy Model B only gets older; sending the newest one keeps the
+        output's delay at about one inference instead of a growing queue. Skipped frames are logged
+        as detection-stride frames, so the tracker carries their boxes forward (never shown as empty).
+        """
+        n = 0
+        while len(self.pending_b) > keep:
+            rec = self.records.get(self.pending_b.popleft())
+            if rec is None or rec.final:
+                continue
+            rec.routed = False
+            rec.b_status = BStatus.SKIPPED
+            rec.route_reason = f"{STRIDE_REASON}: live mode, Model B busy - a newer frame was sent instead"
+            self._finalize(rec)
+            n += 1
+        self.b_superseded += n
+        return n
 
     def mark_b_dispatched(self, frame_id: int, t_enqueue: float, scale: float) -> None:
         rec = self.records[frame_id]

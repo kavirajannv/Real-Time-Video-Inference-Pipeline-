@@ -2,7 +2,7 @@ import random
 
 from vpipe.aggregator import Aggregator
 from vpipe.models import fake_classification, fake_detections
-from vpipe.schema import AStatus, BStatus, Stage, WorkerResult
+from vpipe.schema import STRIDE_REASON, AStatus, BStatus, Stage, WorkerResult
 
 from conftest import run_fake, video_info
 
@@ -111,3 +111,18 @@ def test_pipeline_results_match_their_frames_under_jitter(tmp_path, fault):
 
     frames, shape = video_info(tmp_path / "output_annotated.mp4")
     assert frames == n and shape == (120, 160, 3)
+
+
+def test_live_latest_only_skips_superseded_model_b_frames():
+    agg = Aggregator(["person"], 0.3, 10, 10)
+    for fid in range(3):
+        agg.on_ingest(fid, 0.0, None, AStatus.NOT_GATED, "fast mode: no gate")
+    agg.set_total(3)
+    assert agg.skip_superseded_b(keep=1) == 2
+    assert list(agg.pending_b) == [2]  # only the newest frame still goes to Model B
+    released = agg.pop_ready()
+    assert [r.frame_id for r in released] == [0, 1]
+    for r in released:  # carried forward by the tracker (held), not reported as "no detections"
+        assert r.b_status == BStatus.SKIPPED and r.route_reason.startswith(STRIDE_REASON)
+    agg.on_result(_b(2, []))
+    assert [r.frame_id for r in agg.pop_ready()] == [2]

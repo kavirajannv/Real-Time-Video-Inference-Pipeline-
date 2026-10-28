@@ -28,6 +28,8 @@ from .schema import STRIDE_REASON, BStatus, FrameRecord
 log = logging.getLogger(__name__)
 
 PERSON = "person"
+# held frames: boxes move at the track's velocity for at most this many frames (~1 s), then stop
+MAX_EXTRAPOLATE_FRAMES = 30
 
 
 # --------------------------------------------------------------------------- scene cuts
@@ -143,6 +145,8 @@ class Analytics:
         self.fps = fps
         self.detect_every = max(1, detect_every)
         self._held: list[dict] = []              # last tracked boxes, shown on frames Model B skips (stride)
+        self._held_frame = 0                     # frame id those boxes were measured on
+        self._motion: dict[int, tuple] = {}     # id -> (frame, box, px/frame or None until 2 measurements)
         self.stage_s = {"scene": 0.0, "tracker": 0.0, "attributes": 0.0}
         self.line = ((count_line[0] * self.w, count_line[1] * self.h), (count_line[2] * self.w, count_line[3] * self.h))
         self.min_track_frames = min_track_frames
@@ -167,6 +171,7 @@ class Analytics:
         self.tracker = _make_tracker(self.fps / self.detect_every)
         self._gid = {}
         self._held = []
+        self._motion = {}
         self.scenes.append(_Scene(len(self.scenes), frame_id, image,
                                   (self.h // self.heat_div + 1, self.w // self.heat_div + 1)))
 
@@ -221,8 +226,9 @@ class Analytics:
                 tracked = [{"id": None, "label": d["label"], "conf": d["conf"], "box": d["box"]}
                            for d in rec.detections if d["conf"] >= 0.25]
         elif held:
-            # Model B did not run on this frame: keep the last tracked boxes (no tracker step, no new IDs)
-            tracked = [dict(t) for t in self._held]
+            # Model B did not run on this frame: no tracker step and no new IDs, but each box keeps moving
+            # at its track's measured velocity, so it follows the person instead of being left behind
+            tracked = self._extrapolate(rec.frame_id)
         elif rec.b_status in (BStatus.DETECTIONS, BStatus.NO_DETECTIONS, BStatus.SKIPPED):
             dets = rec.detections if rec.b_status == BStatus.DETECTIONS else []
             out = self.tracker.update(_boxes(dets, (self.h, self.w)), image)
@@ -264,10 +270,12 @@ class Analytics:
         if scene is not None:
             scene.end_frame = rec.frame_id
         if status == "OK" and not held:
-            self._held = tracked
+            self._held, self._held_frame = tracked, rec.frame_id
+            self._update_motion(rec.frame_id, tracked)
         elif status != "OK":
             self._held = []
 
+        confs = [t["conf"] for t in tracked if t.get("conf") is not None]
         counts = Counter(t["label"] for t in tracked)
         in_frame_gender = Counter(t.get("gender", "unknown") for t in tracked if t["label"] == PERSON)
         result = {
@@ -279,6 +287,11 @@ class Analytics:
             "line_in": self.line_in,
             "line_out": self.line_out,
             "tracks": tracked,
+            # frame-level confidence: were these boxes measured on this frame or carried by the tracker?
+            "box_source": None if status != "OK" else ("tracked" if held else "detected"),
+            "box_age_frames": rec.frame_id - self._held_frame if status == "OK" and held else 0,
+            "conf_mean": round(float(np.mean(confs)), 3) if confs and status == "OK" else None,
+            "conf_min": round(float(min(confs)), 3) if confs and status == "OK" else None,
         }
         if self.attrs is not None:
             ok = status == "OK"
@@ -286,6 +299,35 @@ class Analytics:
             result["unique_by_gender"] = dict(self.unique_by_gender())
         self.rows.append({"frame_id": rec.frame_id, "time_s": round(rec.frame_id / self.fps, 3), **result})
         return result
+
+    def _update_motion(self, frame_id: int, tracked: list[dict]) -> None:
+        """Per-track velocity (px/frame) from consecutive measured boxes, smoothed against jitter."""
+        motion = {}
+        for t in tracked:
+            if t["id"] is None:
+                continue
+            box = np.asarray(t["box"], dtype=np.float64)
+            vel = None
+            prev = self._motion.get(t["id"])
+            if prev is not None and 0 < frame_id - prev[0] <= MAX_EXTRAPOLATE_FRAMES:
+                vel = (box - prev[1]) / (frame_id - prev[0])
+                if prev[2] is not None:
+                    vel = 0.5 * vel + 0.5 * prev[2]
+            motion[t["id"]] = (frame_id, box, vel)
+        self._motion = motion  # tracks not seen on this frame are dropped with it
+
+    def _extrapolate(self, frame_id: int) -> list[dict]:
+        dt = min(frame_id - self._held_frame, MAX_EXTRAPOLATE_FRAMES)
+        out = []
+        for t in self._held:
+            t = dict(t)
+            m = self._motion.get(t["id"])
+            if m is not None and m[2] is not None and dt > 0:
+                x1, y1, x2, y2 = m[1] + m[2] * dt
+                t["box"] = [float(np.clip(x1, 0, self.w - 1)), float(np.clip(y1, 0, self.h - 1)),
+                            float(np.clip(x2, 1, self.w)), float(np.clip(y2, 1, self.h))]
+            out.append(t)
+        return out
 
     # ------------------------------------------------------------------ end of run
     def finalize(self) -> dict:

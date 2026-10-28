@@ -187,3 +187,59 @@ def test_stride_frames_hold_the_last_boxes_without_new_identities(tmp_path):
         assert out["status"] == "OK" and out["people"] == 1, i  # never drops to 0 on a held frame
     assert out["unique_people"] == 1
     assert len({t["id"] for t in out["tracks"]}) == 1
+
+
+def test_held_boxes_follow_the_tracks_motion(tmp_path):
+    from vpipe.schema import STRIDE_REASON
+
+    # a person walking right at 4 px/frame, detected every 5th frame: in between, the box must keep
+    # moving with them instead of freezing where the last detection put it
+    an = Analytics(tmp_path, (W, H), 30.0, min_track_frames=5, detect_every=5)
+    img = _frame()
+    errors = []
+    for i in range(40):
+        cx = 100 + 4 * i
+        if i % 5:
+            rec = _rec(i, [], b_status=BStatus.SKIPPED)
+            rec.route_reason = f"{STRIDE_REASON}: Model B runs every 5 frames"
+        else:
+            rec = _rec(i, [_person(cx, 250)])
+        out = an.process(rec, img)
+        if i >= 15 and i % 5:  # velocity known after a few detections
+            x1, _, x2, _ = out["tracks"][0]["box"]
+            errors.append(abs((x1 + x2) / 2 - cx))
+    assert max(errors) < 4.0, errors  # frozen boxes would be 4-16 px behind
+
+
+def test_people_frames_render_with_frame_confidence_and_separate_labels(tmp_path):
+    from vpipe.schema import STRIDE_REASON
+    from vpipe.writer import annotate, status_lines
+
+    an = Analytics(tmp_path, (W, H), 30.0, min_track_frames=5, detect_every=2)
+    img = _frame()
+    crowd = [_person(200 + 30 * j, 250, conf=0.5 + 0.1 * j) for j in range(4)]  # overlapping people
+    for i in range(6):
+        rec = _rec(i, crowd if i % 2 == 0 else [], b_status=BStatus.DETECTIONS if i % 2 == 0 else BStatus.SKIPPED)
+        rec.a_label, rec.a_conf = "person", 0.9
+        if i % 2:
+            rec.route_reason = f"{STRIDE_REASON}: Model B runs every 2 frames"
+        rec.analytics = an.process(rec, img)
+        out = annotate(img, rec, an.line)  # every drawing path runs without error
+        assert out.shape == img.shape
+        box_line = status_lines(rec)[-1][0]
+        if i % 2 == 0:
+            assert box_line.startswith("Boxes: DETECTED"), box_line
+        else:
+            assert box_line.startswith("Boxes: estimated (+1 fr)"), box_line
+        assert "conf mean" in box_line or i == 0  # a brand-new track may not be confirmed yet
+
+
+def test_min_conf_shown_hides_weak_boxes_but_keeps_them_counted():
+    from vpipe.writer import _box_line, _drawn_tracks
+
+    an = {"status": "OK", "box_source": "detected", "box_age_frames": 0, "people": 3,
+          "tracks": [{"id": i, "label": "person", "conf": c, "box": [0, 0, 10, 10]} for i, c in enumerate((0.95, 0.85, 0.40))]}
+    assert [t["conf"] for t in _drawn_tracks(an, min_conf=0.80)] == [0.95, 0.85]
+    line = _box_line(an, min_conf=0.80)[0]
+    assert "2 of 3 shown (>= 80%)" in line and "min 85%" in line, line
+    assert an["people"] == 3  # counts are not filtered

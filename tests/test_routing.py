@@ -106,6 +106,6 @@ def test_fast_mode_pipeline_holds_and_skips_the_gate(tmp_path):
 def test_fast_settings_scale_with_cpu_size():
     from vpipe.cli import fast_settings
 
-    assert fast_settings(4) == (8, 2)
+    assert fast_settings(4) == (10, 2)
     assert fast_settings(6) == (6, 3)
     assert fast_settings(8)[0] < fast_settings(4)[0]

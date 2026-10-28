@@ -65,7 +65,7 @@ class ModelSpec:
 
 @dataclass
 class PipelineConfig:
-    video: str = "data/solutions_ci_demo.mp4"
+    video: str = "data/people_walking.mp4"
     output_dir: str = "outputs"
     output_name: str = "output_annotated.mp4"
 
@@ -115,11 +115,14 @@ class PipelineConfig:
     detect_every: int = 1          # Model B on every Nth frame Model A routes; the tracker holds boxes in between
     infer_every: int = 1           # fast mode: only every Nth frame goes to the models at all (others: HELD)
     gate: bool = True              # False (fast mode): inferred frames skip Model A and go straight to Model B
+    b_latest_only: bool = False    # live: Model B gets only the newest routed frame; older waiting ones are skipped
     pace: bool = False             # offline mode but never faster than the source fps (reader waits, never drops)
     output_height: int = 0         # write the video at this height (0 = source size); analytics use full frames
     video_preset: str = "veryfast" # libx264 preset for the output video (superfast/ultrafast = less CPU, bigger file)
     show_classes: tuple[str, ...] = ()  # classes drawn in the video (empty = all); summaries still count every class
     write_video: bool = True
+    min_conf_shown: float = 0.0    # people preset: draw only boxes the detector is this sure of (default 0.80)
+    preview: bool = False          # live window: input (left) | annotated output (right) while running
 
     @property
     def output_path(self) -> Path:

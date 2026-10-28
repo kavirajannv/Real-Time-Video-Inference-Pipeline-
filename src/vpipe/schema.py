@@ -42,10 +42,13 @@ class BStatus(str, Enum):
     ERROR = "ERROR"
     TIMEOUT = "TIMEOUT"
     CRASHED = "CRASHED"
+    STALE = "STALE"          # live mode: too old when a Model B worker picked it up, skipped to stay current
     ABORTED = "ABORTED"
 
 
-A_FAILURES = {AStatus.ERROR, AStatus.TIMEOUT, AStatus.CRASHED, AStatus.STALE, AStatus.ABORTED}
+# STALE (like DROPPED) is the live mode's documented overload policy, not a failed inference: it gets its
+# own overall status so a live run's error count only shows real failures
+A_FAILURES = {AStatus.ERROR, AStatus.TIMEOUT, AStatus.CRASHED, AStatus.ABORTED}
 B_FAILURES = {BStatus.ERROR, BStatus.TIMEOUT, BStatus.CRASHED, BStatus.ABORTED}
 
 SKIP_REASON = "Routing condition not met"
@@ -144,4 +147,6 @@ class FrameRecord:
             return "INCOMPLETE"
         if self.is_failure:
             return "ERROR"
+        if self.a_status == AStatus.STALE or self.b_status == BStatus.STALE:
+            return "STALE"
         return "OK"

@@ -81,6 +81,14 @@ class Sampler(threading.Thread):
         self.join(timeout=2.0)
 
 
+def _steady_output_fps(rows: list[dict]) -> float | None:
+    written = [r["t_ingest_s"] + r["e2e_latency_ms"] / 1000.0 for r in rows
+               if r.get("t_ingest_s") is not None and r.get("e2e_latency_ms") is not None]
+    if len(written) < 2 or max(written) <= min(written):
+        return None
+    return round((len(written) - 1) / (max(written) - min(written)), 2)
+
+
 def summarize(rows: list[dict], samples: list[dict], *, wall_s: float, startup_s: float, source_fps: float,
               ingest_span_s: float, extra: dict | None = None) -> dict:
     n = len(rows)
@@ -100,7 +108,9 @@ def summarize(rows: list[dict], samples: list[dict], *, wall_s: float, startup_s
         "frames_invalid": count(lambda r: r["a_status"] == "INVALID"),
         "frames_held": count(lambda r: r["a_status"] == "HELD"),
         "frames_not_gated": count(lambda r: r["a_status"] == "NOT_GATED"),
-        "a_errors": count(lambda r: r["a_status"] in ("ERROR", "CRASHED", "STALE")),
+        "a_errors": count(lambda r: r["a_status"] in ("ERROR", "CRASHED")),
+        "a_stale": count(lambda r: r["a_status"] == "STALE"),   # live: skipped by --stale-after, not errors
+        "b_stale": count(lambda r: r["b_status"] == "STALE"),
         "a_timeouts": count(lambda r: r["a_status"] == "TIMEOUT"),
         "b_errors": count(lambda r: r["b_status"] in ("ERROR", "CRASHED")),
         "b_timeouts": count(lambda r: r["b_status"] == "TIMEOUT"),
@@ -108,6 +118,9 @@ def summarize(rows: list[dict], samples: list[dict], *, wall_s: float, startup_s
         "source_fps": round(source_fps, 2),
         "input_fps": round(n / ingest_span_s, 2) if ingest_span_s > 0 else None,
         "output_fps": round(n / wall_s, 2) if wall_s > 0 else None,
+        # first to last written frame: the rate the output keeps up with, without the pipeline's
+        # fill/drain latency that output_fps (frames / wall time) also counts
+        "output_fps_steady": _steady_output_fps(rows),
         "a_throughput_fps": round(a_ok / wall_s, 2) if wall_s > 0 else None,
         "wall_time_s": round(wall_s, 3),
         "startup_s": round(startup_s, 3),

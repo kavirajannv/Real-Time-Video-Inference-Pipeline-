@@ -162,7 +162,7 @@ class Pipeline:
         self.pool_b = WorkerPool(ctx, Stage.B, cfg.b_workers, q_b, results, cfg.model_b, threads, cfg.fault_b, stale)
 
         t_boot = time.perf_counter()
-        sampler = writer = reader = writer_thread = None
+        sampler = writer = reader = writer_thread = preview = None
         try:
             self.pool_a.start()
             self.pool_b.start()
@@ -193,8 +193,14 @@ class Pipeline:
                                       cfg.scene_cut_threshold, attributes,
                                       detect_every=cfg.detect_every * cfg.infer_every,
                                       background_attributes=True)
+            if cfg.preview and cfg.write_video:
+                from .preview import LivePreview
+
+                preview = LivePreview(on_quit=self.request_stop)
+            elif cfg.preview:
+                log.warning("--preview needs the output video; ignored with --no-video")
             writer = OutputWriter(cfg.output_path, fps_out, size, t0, cfg.write_video, analytics, cfg.show_classes,
-                                  cfg.output_height, cfg.video_preset)
+                                  cfg.output_height, cfg.video_preset, preview, cfg.min_conf_shown)
             writer_state = {"error": None}
 
             total = source.frame_count
@@ -220,7 +226,17 @@ class Pipeline:
 
             def writer_loop():
                 while True:
-                    item = writer_q.get()
+                    try:
+                        item = writer_q.get(timeout=0.01)
+                    except queue.Empty:
+                        if writer_state["error"] is None:
+                            try:
+                                writer.flush()  # idle: don't keep the end of a burst back
+                            except Exception as e:  # noqa: BLE001
+                                writer_state["error"] = e
+                                log.exception("writer failed")
+                                self.stop_event.set()
+                        continue
                     if item is None:
                         return
                     rec, img = item
@@ -287,6 +303,8 @@ class Pipeline:
                 q.close()
             if writer:
                 writer.close()
+            if preview:
+                preview.close()
             if own_source:
                 source.close()
 
@@ -315,6 +333,7 @@ class Pipeline:
                 "worker_restarts": {"A": self.pool_a.restarts, "B": self.pool_b.restarts},
                 "late_results_discarded": agg.late_results,
                 "unexpected_results": agg.unexpected_results,
+                "b_superseded_live": agg.b_superseded,
                 "output_video": str(cfg.output_path) if cfg.write_video else None,
                 "frame_size": list(size),
                 "output_fps_setting": fps_out,
@@ -399,6 +418,15 @@ class Pipeline:
 
     def _dispatch_b(self, agg: Aggregator, q_b, store: FrameStore) -> None:
         """Move routed frames into queue B without ever blocking the main loop."""
+        if self.cfg.b_latest_only:
+            # live: a task already waiting in queue B means every worker is busy - don't queue more
+            # behind it, keep only the newest routed frame until a worker is free
+            agg.skip_superseded_b(keep=1)
+            try:
+                if q_b.qsize() > 0:
+                    return
+            except NotImplementedError:  # macOS: fall back to the bounded queue
+                pass
         while agg.pending_b:
             fid = agg.pending_b[0]
             rec = agg.records.get(fid)

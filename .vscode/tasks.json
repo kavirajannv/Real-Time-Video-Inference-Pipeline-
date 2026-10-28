@@ -3,6 +3,29 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Live stream: 60 s, input | output window (30 FPS)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\run.bat",
+            "args": ["1"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Live stream: save input | output video",
+            "type": "shell",
+            "command": "${workspaceFolder}\\run.bat",
+            "args": ["9"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run menu (all options)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\run.bat",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
             "label": "People analytics: full video",
             "type": "shell",
             "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
@@ -18,6 +41,14 @@
             "args": ["-m", "vpipe", "run", "--preset", "people", "--video", "data/people_walking.mp4",
                      "--a-workers", "1", "--b-workers", "3", "--max-frames", "300",
                      "--output-dir", "outputs/test/people"],
+            "problemMatcher": []
+        },
+        {
+            "label": "People analytics: fast (40 s, up to 30 FPS)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "vpipe", "run", "--preset", "people", "--fast", "--max-seconds", "40",
+                     "--video", "data/people_walking.mp4", "--output-dir", "outputs/fast"],
             "problemMatcher": []
         },
         {
