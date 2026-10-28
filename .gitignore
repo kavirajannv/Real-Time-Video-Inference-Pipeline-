@@ -23,9 +23,8 @@ outputs/
 *.mp4
 .vpipe.lock
 
-# Claude Code (local assistant notes and settings)
-CLAUDE.md
-.claude/
+# Documentation and local tool settings (kept out of the repo)
+*.md
 
 # Editors / OS
 .idea/
